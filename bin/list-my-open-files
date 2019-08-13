@@ -1,0 +1,82 @@
+#!/bin/bash
+
+fUID=`id -u`
+
+usage() { 
+    echo "Usage: `basename $0` [-u UID] [-f FILE] [-p PID]
+
+ -u UID    User ID [default: current user id $fUID]
+ -f FILE   File to monitor
+ -p PID    Track files for process PID" 1>&2; 
+    exit 1; 
+}
+
+DELIM=' '
+
+while getopts ":u:p:f:h" o; do
+    case "$o" in
+        h)  usage ;;
+        u)  fUID=$OPTARG  ;;
+        p)  fPID=$OPTARG  ;;
+        f)  fFILE=$OPTARG ;;
+        *) echo $opt; usage ;;
+    esac
+done
+
+shift $((OPTIND-1))
+
+if [[ "$fPID" != "" ]]; then
+  PID=$fPID
+  while pgrep -P $fPID > /dev/null; do
+    fPID=`pgrep -P $fPID`
+    PID="$PID $fPID"
+  done
+elif [[ -f "$fFILE" ]]; then
+  PID=`fuser "$fFILE" | sed 's/.* : //'`;
+elif [[ "$fUID" != "" ]]; then
+  PID=$( ps -u $fUID -o pid );
+fi
+
+for ps in $PID; do 
+    ([[ -d "/proc/$ps/fd" ]] && [[ -r "/proc/$ps/fd" ]] ) || continue;
+    PRINTED_HEADER=0
+    for fd in /proc/$ps/fd/*; do 
+        [[ "$fd" != "" ]] || continue;
+        BN=`basename $fd`;
+        RL=`readlink $fd`;
+        #[[ -f "$RL" ]] || continue;
+        [[ $RL == /dev* ]] && continue;
+        [[ -f "$RL" ]] || continue;
+
+        FS=`stat --printf '%s' "$RL"`
+        FSH=`numfmt --to=iec --suffix B $FS 2> /dev/null || echo $FS`
+        EXE=`readlink /proc/$ps/exe`;
+
+        if [[ $PRINTED_HEADER -eq 0 ]]; then
+            PRINTED_HEADER=0
+            printf "\e[33m$EXE${DELIM}$ps${DELIM}`ps -o etime= -p $ps | sed 's/\s*//'`\e[0m${DELIM}"
+        fi
+
+        POS=`cat /proc/$ps/fdinfo/$BN | head -n1 | sed 's/.*:\t//'`
+        if [[ $FS -gt 0 ]]; then
+            if [[ $POS -gt 0 ]]; then
+                #MODSEC=`date -r $fd "+%s"`
+                #CURSEC=`date "+%s"`
+
+                POSS=`awk "BEGIN {print $POS * 100.0 / $FS }"`
+                #if [[ $POS != $FS ]]; then
+                #    ETASEC=`awk "BEGIN { printf \"%.f\", (($CURSEC - $MODSEC)/$POS) * $FS - $CURSEC + $MODSEC }"`
+                #    ETA=`date -d@$ETASEC -u "+ETA %Hh%Mm%Ss"`
+                #else
+                #    ETA=
+                #fi
+                printf "$RL${DELIM}\e[33m$FSH${DELIM}%.2f%%${DELIM}\e[0m\n" $POSS
+            else
+                printf "$RL${DELIM}\e[33m$FSH\n\e[0m"
+            fi
+        else
+            printf "$RL\n"
+        fi
+    done
+done
+
